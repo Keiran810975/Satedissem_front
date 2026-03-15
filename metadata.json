@@ -1,0 +1,5 @@
+{
+  "name": "Satellite Transmission Simulator",
+  "description": "A 3D simulation of data transmission between a ground station and a satellite constellation with dynamic topology.",
+  "requestFramePermissions": []
+}
