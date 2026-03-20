@@ -4,8 +4,8 @@ import { OrbitControls, Stars, Text, Float, Line } from '@react-three/drei';
 import * as THREE from 'three';
 import { NodeData, LinkData, Transmission } from '../types';
 
-const INITIAL_CAMERA_POSITION: [number, number, number] = [0, 6, 100];
-const INITIAL_CAMERA_TARGET: [number, number, number] = [0, -35, 0];
+const INITIAL_CAMERA_POSITION: [number, number, number] = [0, 0, 113];
+const INITIAL_CAMERA_TARGET: [number, number, number] = [0, -40, 0];
 
 interface CameraResetControllerProps {
   resetSignal: number;

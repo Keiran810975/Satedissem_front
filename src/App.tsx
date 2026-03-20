@@ -3,18 +3,41 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SatelliteScene } from './components/SatelliteScene';
-import { generateMockNodes, generateMockTopology, generateNodesFromMeta } from './utils/mockData';
-import { parseTopologyJson } from './utils/topologyParser';
-import { NodeData, LinkData, TopologyMeta, Transmission } from './types';
-import { Play, Pause, RotateCcw, LocateFixed, Activity, Database, Radio, Info, Upload } from 'lucide-react';
+import { generateNodesFromMeta } from './utils/mockData';
+import { fetchBackendOptions, fetchTopology, runBackendSimulation } from './utils/api';
+import {
+  BackendConfig,
+  BackendDeliveryEvent,
+  BackendSimulationSummary,
+  LinkData,
+  NodeData,
+  TopologyMeta,
+  Transmission,
+} from './types';
+import { Play, Pause, RotateCcw, LocateFixed, Activity, Database, Radio, Info, Loader2 } from 'lucide-react';
 import { motion } from 'motion/react';
 
-const TOTAL_SHARDS = 10;
-const SATELLITE_COUNT = 32;
-const TRANSMISSION_DURATION = 2000; // ms
-const DEFAULT_BACKEND_TOPOLOGY_FILE = 'intervals32.json';
+const FALLBACK_TOTAL_SHARDS = 10;
+const TRANSMISSION_DURATION_SEC = 0.25;
+const SPEED_OPTIONS = [0.2, 1, 5];
+const DEFAULT_TOPOLOGY_FILE = 'intervals32.json';
+const PLAYBACK_SLOWDOWN = 0.2;
+const MAX_DELIVERIES_PER_TICK = 2;
+const PACKET_VISUAL_DURATION_SEC = TRANSMISSION_DURATION_SEC * PLAYBACK_SLOWDOWN;
+
+function maxTimelineFromLinks(links: LinkData[]): number {
+  let maxEnd = 0;
+  for (const link of links) {
+    for (const [, end] of link.intervals) {
+      if (end > maxEnd) {
+        maxEnd = end;
+      }
+    }
+  }
+  return maxEnd;
+}
 
 export default function App() {
   const [nodes, setNodes] = useState<NodeData[]>([]);
@@ -22,168 +45,227 @@ export default function App() {
   const [transmissions, setTransmissions] = useState<Transmission[]>([]);
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [speed, setSpeed] = useState(1000); // simulation time units per real second
+  const [speed, setSpeed] = useState(0.2);
   const [cameraResetSignal, setCameraResetSignal] = useState(0);
+
+  const [config, setConfig] = useState<BackendConfig | null>(null);
   const [topologyMeta, setTopologyMeta] = useState<TopologyMeta>({
-    num_nodes: SATELLITE_COUNT + 1,
+    num_nodes: 33,
     base_node: 0,
     time_unit: 's',
   });
-  
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [selectedTopologyFile, setSelectedTopologyFile] = useState(DEFAULT_TOPOLOGY_FILE);
+  const [schedulerOptions, setSchedulerOptions] = useState<string[]>([]);
+  const [deliveries, setDeliveries] = useState<BackendDeliveryEvent[]>([]);
+  const [summary, setSummary] = useState<BackendSimulationSummary | null>(null);
+  const [playbackEndTime, setPlaybackEndTime] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+
   const lastUpdateRef = useRef<number>(0);
+  const deliveryCursorRef = useRef<number>(0);
 
-  // Initialize
-  useEffect(() => {
-    const initializeTopology = async () => {
-      try {
-        const query = new URLSearchParams({ file: DEFAULT_BACKEND_TOPOLOGY_FILE });
-        const response = await fetch(`/api/topology?${query.toString()}`);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch backend topology: ${response.status}`);
-        }
-
-        const backendTopology = await response.json() as { meta: TopologyMeta; links: LinkData[] };
-        setTopologyMeta(backendTopology.meta);
-        setNodes(generateNodesFromMeta(backendTopology.meta.num_nodes, backendTopology.meta.base_node, TOTAL_SHARDS));
-        setLinks(backendTopology.links);
-      } catch (error) {
-        console.error('Failed to load backend topology intervals32.json, fallback to frontend mock topology.', error);
-        setTopologyMeta({ num_nodes: SATELLITE_COUNT + 1, base_node: 0, time_unit: 's' });
-        setNodes(generateMockNodes(SATELLITE_COUNT));
-        setLinks(generateMockTopology(SATELLITE_COUNT));
-      }
-    };
-
-    initializeTopology();
+  const resetPlaybackState = useCallback(() => {
+    setCurrentTime(0);
+    setIsPlaying(false);
+    setTransmissions([]);
+    deliveryCursorRef.current = 0;
+    lastUpdateRef.current = 0;
   }, []);
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+  useEffect(() => {
+    const initialize = async () => {
+      setIsLoading(true);
+      setErrorMessage('');
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
       try {
-        const json = JSON.parse(e.target?.result as string);
-        const parsedTopology = parseTopologyJson(json);
-        setLinks(parsedTopology.links);
-        setTopologyMeta(parsedTopology.meta);
-        setNodes(generateNodesFromMeta(parsedTopology.meta.num_nodes, parsedTopology.meta.base_node, TOTAL_SHARDS));
-        setCurrentTime(0);
-        setTransmissions([]);
-        setIsPlaying(false);
-      } catch (err) {
-        console.error("Failed to parse topology JSON", err);
-        alert("Invalid topology JSON format");
+        const options = await fetchBackendOptions();
+        setSchedulerOptions(options.scheduler_options);
+
+        const preferredTopology = options.topology_files.some((file) => file.name === DEFAULT_TOPOLOGY_FILE)
+          ? DEFAULT_TOPOLOGY_FILE
+          : options.default_topology_file ?? options.topology_files[0]?.name ?? DEFAULT_TOPOLOGY_FILE;
+
+        setSelectedTopologyFile(preferredTopology);
+
+        const initialConfig: BackendConfig = {
+          ...options.default_config,
+          topo_file: preferredTopology,
+        };
+        setConfig(initialConfig);
+
+        const topology = await fetchTopology(preferredTopology);
+        setTopologyMeta(topology.meta);
+        setLinks(topology.links);
+        setNodes(generateNodesFromMeta(topology.meta.num_nodes, topology.meta.base_node, initialConfig.num_fragments));
+        setPlaybackEndTime(maxTimelineFromLinks(topology.links));
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : 'Failed to initialize backend topology');
+      } finally {
+        setIsLoading(false);
       }
     };
-    reader.readAsText(file);
-  };
 
-  // Simulation Logic
-  const updateSimulation = useCallback((deltaTime: number) => {
-    setCurrentTime(prev => prev + deltaTime * speed);
+    initialize();
+  }, []);
 
-    setTransmissions(prev => {
-      // Filter out completed transmissions and update nodes
-      const active = prev.filter(tx => {
-        const elapsed = (currentTime + deltaTime * speed) - tx.startTime;
-        if (elapsed >= tx.duration) {
-          // Transmission completed, update target node
-          setNodes(currentNodes => currentNodes.map(node => {
-            if (node.id === tx.toId) {
-              const newShards = new Set(node.shards);
-              newShards.add(tx.shardId);
-              return { ...node, shards: newShards };
-            }
-            return node;
-          }));
-          return false;
-        }
-        return true;
-      });
+  const handleRunSimulation = useCallback(async () => {
+    if (!config) return;
 
-      // Try to start new transmissions
-      const newTx: Transmission[] = [];
-      
-      // For each node that has shards, check if it can transmit to a neighbor
-      nodes.forEach(fromNode => {
-        if (fromNode.shards.size === 0) return;
+    setIsLoading(true);
+    setErrorMessage('');
 
-        // Find neighbors via active links
-        const activeLinks = links.filter(link => {
-          const isRelevant = link.from === fromNode.id || link.to === fromNode.id;
-          const isActive = link.intervals.some(([start, end]) => currentTime >= start && currentTime <= end);
-          return isRelevant && isActive;
-        });
+    try {
+      const requestConfig: BackendConfig = {
+        ...config,
+        topo_file: selectedTopologyFile || config.topo_file,
+      };
 
-        activeLinks.forEach(link => {
-          const toId = link.from === fromNode.id ? link.to : link.from;
-          const toNode = nodes.find(n => n.id === toId);
-          
-          if (!toNode) return;
+      const response = await runBackendSimulation(requestConfig, selectedTopologyFile);
+      setConfig(response.config);
+      setTopologyMeta(response.topology.meta);
+      setLinks(response.topology.links);
+      setNodes(
+        generateNodesFromMeta(
+          response.topology.meta.num_nodes,
+          response.topology.meta.base_node,
+          response.config.num_fragments,
+        ),
+      );
+      setDeliveries(response.deliveries);
+      setSummary(response.summary);
+      setPlaybackEndTime(response.summary.completion_time_sec ?? response.summary.final_time_sec);
+      resetPlaybackState();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Backend simulation failed');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [config, resetPlaybackState, selectedTopologyFile]);
 
-          // Check if toNode needs any shards that fromNode has
-          const missingShards = Array.from(fromNode.shards).filter(s => !toNode.shards.has(s));
-          
-          if (missingShards.length > 0) {
-            // Check if there's already a transmission to this node for one of these shards
-            const alreadyTransmitting = [...prev, ...newTx].some(tx => tx.toId === toId && missingShards.includes(tx.shardId));
-            
-            if (!alreadyTransmitting && Math.random() < 0.05) { // Random chance to start to simulate "scheduling"
-              const shardToTransmit = missingShards[0];
-              newTx.push({
-                id: `${fromNode.id}-${toId}-${shardToTransmit}-${currentTime}`,
-                fromId: fromNode.id,
-                toId: toId,
-                shardId: shardToTransmit,
-                startTime: currentTime,
-                duration: TRANSMISSION_DURATION,
-              });
+  const updateSimulation = useCallback((deltaSeconds: number) => {
+    setCurrentTime((prevTime) => {
+      const timelineDelta = deltaSeconds * speed * PLAYBACK_SLOWDOWN;
+      const nextTime = prevTime + timelineDelta;
+
+      const newEvents: BackendDeliveryEvent[] = [];
+      while (
+        deliveryCursorRef.current < deliveries.length
+        && deliveries[deliveryCursorRef.current].time_sec <= nextTime
+        && newEvents.length < MAX_DELIVERIES_PER_TICK
+      ) {
+        newEvents.push(deliveries[deliveryCursorRef.current]);
+        deliveryCursorRef.current += 1;
+      }
+
+      if (newEvents.length > 0) {
+        setNodes((prevNodes) => {
+          const shardMap = new Map<number, Set<number>>();
+          for (const node of prevNodes) {
+            shardMap.set(node.id, new Set(node.shards));
+          }
+
+          for (const event of newEvents) {
+            const targetShards = shardMap.get(event.dst_id);
+            if (targetShards) {
+              targetShards.add(event.fragment_id);
             }
           }
+
+          return prevNodes.map((node) => ({
+            ...node,
+            shards: shardMap.get(node.id) ?? new Set<number>(),
+          }));
         });
+      }
+
+      setTransmissions((prevTransmissions) => {
+        const activeTransmissions = prevTransmissions.filter(
+          (tx) => nextTime - tx.startTime <= tx.duration,
+        );
+
+        if (newEvents.length === 0) {
+          return activeTransmissions;
+        }
+
+        const spawnedTransmissions = newEvents.map((event, index) => ({
+          id: `${event.src_id}-${event.dst_id}-${event.fragment_id}-${event.time_sec}-${index}`,
+          fromId: event.src_id,
+          toId: event.dst_id,
+          shardId: event.fragment_id,
+          startTime: nextTime,
+          duration: PACKET_VISUAL_DURATION_SEC,
+        }));
+
+        return [...activeTransmissions, ...spawnedTransmissions];
       });
 
-      return [...active, ...newTx];
+      if (
+        playbackEndTime > 0
+        && nextTime >= playbackEndTime + PACKET_VISUAL_DURATION_SEC
+        && deliveryCursorRef.current >= deliveries.length
+      ) {
+        setIsPlaying(false);
+      }
+
+      return nextTime;
     });
-  }, [nodes, links, currentTime, speed]);
+  }, [deliveries, playbackEndTime, speed]);
 
   useEffect(() => {
-    let frameId: number;
+    if (!isPlaying) return;
+
+    let frameId = 0;
     const loop = (time: number) => {
-      if (isPlaying) {
-        const deltaTime = lastUpdateRef.current ? (time - lastUpdateRef.current) / 1000 : 0;
-        updateSimulation(deltaTime);
-      }
+      const deltaSeconds = lastUpdateRef.current ? (time - lastUpdateRef.current) / 1000 : 0;
       lastUpdateRef.current = time;
+      updateSimulation(deltaSeconds);
       frameId = requestAnimationFrame(loop);
     };
+
     frameId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(frameId);
   }, [isPlaying, updateSimulation]);
 
-  const handleReset = () => {
-    setCurrentTime(0);
-    setNodes(generateNodesFromMeta(topologyMeta.num_nodes, topologyMeta.base_node, TOTAL_SHARDS));
-    setTransmissions([]);
-    setIsPlaying(false);
-  };
+  const handleReset = useCallback(() => {
+    const shardCount = Math.max(config?.num_fragments ?? FALLBACK_TOTAL_SHARDS, 1);
+    resetPlaybackState();
 
-  const totalProgress = nodes.length > 1 
-    ? nodes.filter(n => n.type === 'satellite').reduce((acc, n) => acc + n.shards.size, 0) / ((nodes.length - 1) * TOTAL_SHARDS)
-    : 0;
+    setNodes((prevNodes) =>
+      prevNodes.map((node) => ({
+        ...node,
+        shards:
+          node.type === 'station'
+            ? new Set(Array.from({ length: shardCount }, (_, i) => i))
+            : new Set<number>(),
+      })),
+    );
+  }, [config, resetPlaybackState]);
 
-  useEffect(() => {
-    if (isPlaying && totalProgress >= 1) {
-      setIsPlaying(false);
+  const totalShards = Math.max(config?.num_fragments ?? FALLBACK_TOTAL_SHARDS, 1);
+  const totalProgress = useMemo(() => {
+    const satellites = nodes.filter((node) => node.type === 'satellite');
+    const denominator = satellites.length * totalShards;
+    if (denominator === 0) return 0;
+
+    const ownedShards = satellites.reduce((sum, node) => sum + node.shards.size, 0);
+    return ownedShards / denominator;
+  }, [nodes, totalShards]);
+
+  const runStatus = useMemo(() => {
+    if (isLoading) return 'Running backend...';
+    if (errorMessage) return errorMessage;
+    if (!summary) return 'Ready (select algorithm, then Run Backend)';
+
+    if (summary.completed) {
+      const doneAt = summary.completion_time_sec?.toFixed(2) ?? summary.final_time_sec.toFixed(2);
+      return `Completed at ${doneAt}s`;
     }
-  }, [isPlaying, totalProgress]);
+    return `Incomplete (${summary.total_deliveries} deliveries)`;
+  }, [errorMessage, isLoading, summary]);
 
   return (
     <div className="flex flex-col h-screen bg-[#020617] text-slate-200 overflow-hidden font-sans">
-      {/* Header */}
       <header className="flex items-center justify-between px-8 py-4 border-b border-white/10 bg-black/20 backdrop-blur-md z-10">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-indigo-500/20 rounded-lg">
@@ -198,17 +280,25 @@ export default function App() {
         <div className="flex items-center gap-6">
           <div className="flex flex-col items-end">
             <span className="text-[10px] uppercase tracking-tighter text-slate-500">Simulation Time</span>
-            <span className="font-mono text-lg text-indigo-300">{(currentTime / 1000).toFixed(2)}s</span>
+            <span className="font-mono text-lg text-indigo-300">{currentTime.toFixed(2)}s</span>
           </div>
           <div className="h-8 w-px bg-white/10" />
           <div className="flex items-center gap-2">
-            <button 
-              onClick={() => setIsPlaying(!isPlaying)}
-              className="p-3 bg-white text-black rounded-full hover:bg-indigo-400 hover:text-white transition-all active:scale-95 shadow-lg shadow-indigo-500/20"
+            <button
+              onClick={() => {
+                if (playbackEndTime > 0 && currentTime >= playbackEndTime) {
+                  handleReset();
+                  setIsPlaying(true);
+                  return;
+                }
+                setIsPlaying((prev) => !prev);
+              }}
+              disabled={deliveries.length === 0 || isLoading}
+              className="p-3 bg-white text-black rounded-full hover:bg-indigo-400 hover:text-white transition-all active:scale-95 shadow-lg shadow-indigo-500/20 disabled:opacity-50"
             >
               {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 fill-current" />}
             </button>
-            <button 
+            <button
               onClick={handleReset}
               className="p-3 bg-white/5 border border-white/10 rounded-full hover:bg-white/10 transition-all active:scale-95"
             >
@@ -222,27 +312,19 @@ export default function App() {
             >
               <LocateFixed className="w-5 h-5" />
             </button>
-            <div className="h-8 w-px bg-white/10 mx-2" />
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              onChange={handleFileUpload} 
-              className="hidden" 
-              accept=".json"
-            />
-            <button 
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-all text-sm font-medium"
+            <button
+              onClick={handleRunSimulation}
+              disabled={!config || isLoading}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-all text-sm font-medium disabled:opacity-50"
             >
-              <Upload className="w-4 h-4" />
-              <span>Import Topology</span>
+              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+              <span>Run Backend</span>
             </button>
           </div>
         </div>
       </header>
 
       <main className="flex-1 relative flex">
-        {/* Sidebar */}
         <aside className="w-80 border-r border-white/10 bg-black/40 backdrop-blur-xl p-6 flex flex-col gap-8 z-10 min-h-0">
           <section>
             <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
@@ -255,14 +337,14 @@ export default function App() {
                   <span className="text-xl font-bold text-white">{(totalProgress * 100).toFixed(1)}%</span>
                 </div>
                 <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
-                  <motion.div 
-                    className="h-full bg-indigo-500" 
+                  <motion.div
+                    className="h-full bg-indigo-500"
                     initial={{ width: 0 }}
                     animate={{ width: `${totalProgress * 100}%` }}
                   />
                 </div>
               </div>
-              
+
               <div className="grid grid-cols-2 gap-3">
                 <div className="p-3 bg-white/5 rounded-lg border border-white/5">
                   <span className="block text-[10px] text-slate-500 uppercase">Nodes</span>
@@ -273,6 +355,41 @@ export default function App() {
                   <span className="text-lg font-semibold text-amber-400">{transmissions.length}</span>
                 </div>
               </div>
+
+              <div className="p-3 bg-white/5 rounded-lg border border-white/5">
+                <span className="block text-[10px] text-slate-500 uppercase">Status</span>
+                <span className={`text-sm ${errorMessage ? 'text-red-300' : 'text-slate-300'}`}>{runStatus}</span>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+              <Radio className="w-3 h-3" /> Backend Algorithm
+            </h3>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[10px] uppercase text-slate-500 mb-1">Scheduler</label>
+                <select
+                  value={config?.scheduler_type ?? ''}
+                  onChange={(event) =>
+                    setConfig((prev) => (prev ? { ...prev, scheduler_type: event.target.value } : prev))
+                  }
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm"
+                  disabled={!config || isLoading}
+                >
+                  {schedulerOptions.map((scheduler) => (
+                    <option key={scheduler} value={scheduler}>
+                      {scheduler}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="p-3 bg-white/5 rounded-lg border border-white/5">
+                <span className="block text-[10px] text-slate-500 uppercase">Topology</span>
+                <span className="text-sm text-slate-300">{selectedTopologyFile}</span>
+              </div>
             </div>
           </section>
 
@@ -281,22 +398,22 @@ export default function App() {
               <Database className="w-3 h-3" /> Node Registry
             </h3>
             <div className="flex-1 min-h-0 overflow-y-auto pr-2 space-y-2 custom-scrollbar">
-              {nodes.map(node => (
+              {nodes.map((node) => (
                 <div key={node.id} className="group p-3 bg-white/5 rounded-lg border border-white/5 hover:border-indigo-500/30 transition-colors">
                   <div className="flex justify-between items-center mb-1">
                     <span className="text-sm font-medium text-slate-300">
                       {node.type === 'station' ? 'Base Station' : `Satellite ${node.id}`}
                     </span>
-                    <span className={`w-2 h-2 rounded-full ${node.shards.size === TOTAL_SHARDS ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-indigo-500'}`} />
+                    <span className={`w-2 h-2 rounded-full ${node.shards.size === totalShards ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-indigo-500'}`} />
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-indigo-400/50" 
-                        style={{ width: `${(node.shards.size / TOTAL_SHARDS) * 100}%` }} 
+                      <div
+                        className="h-full bg-indigo-400/50"
+                        style={{ width: `${(node.shards.size / totalShards) * 100}%` }}
                       />
                     </div>
-                    <span className="text-[10px] font-mono text-slate-500">{node.shards.size}/{TOTAL_SHARDS}</span>
+                    <span className="text-[10px] font-mono text-slate-500">{node.shards.size}/{totalShards}</span>
                   </div>
                 </div>
               ))}
@@ -308,25 +425,23 @@ export default function App() {
               <div className="flex items-start gap-3">
                 <Info className="w-4 h-4 text-indigo-400 mt-0.5" />
                 <p className="text-xs text-indigo-300/80 leading-relaxed">
-                  Transmission logic: Nodes share missing shards with neighbors over active links. Base station initiates the process.
+                  Playback now uses backend scheduler deliveries from the real simulation API.
                 </p>
               </div>
             </div>
           </section>
         </aside>
 
-        {/* 3D View */}
         <div className="flex-1 relative">
-          <SatelliteScene 
-            nodes={nodes} 
-            links={links} 
-            transmissions={transmissions} 
+          <SatelliteScene
+            nodes={nodes}
+            links={links}
+            transmissions={transmissions}
             currentTime={currentTime}
-            totalShards={TOTAL_SHARDS}
+            totalShards={totalShards}
             cameraResetSignal={cameraResetSignal}
           />
-          
-          {/* Legend */}
+
           <div className="absolute bottom-8 left-8 p-4 bg-black/60 backdrop-blur-md rounded-2xl border border-white/10 flex gap-6">
             <div className="flex items-center gap-2">
               <div className="w-3 h-3 rounded-full bg-emerald-500" />
@@ -346,15 +461,14 @@ export default function App() {
             </div>
           </div>
 
-          {/* Speed Control */}
           <div className="absolute top-8 right-8 flex items-center gap-4 p-2 bg-black/60 backdrop-blur-md rounded-full border border-white/10">
-            {[100, 1000, 5000].map(s => (
+            {SPEED_OPTIONS.map((multiplier) => (
               <button
-                key={s}
-                onClick={() => setSpeed(s)}
-                className={`px-4 py-1.5 rounded-full text-[10px] font-bold transition-all ${speed === s ? 'bg-white text-black' : 'text-slate-400 hover:text-white'}`}
+                key={multiplier}
+                onClick={() => setSpeed(multiplier)}
+                className={`px-4 py-1.5 rounded-full text-[10px] font-bold transition-all ${speed === multiplier ? 'bg-white text-black' : 'text-slate-400 hover:text-white'}`}
               >
-                {s === 100 ? '0.1x' : s === 1000 ? '1x' : '5x'}
+                {multiplier}x
               </button>
             ))}
           </div>
@@ -375,7 +489,7 @@ export default function App() {
         .custom-scrollbar::-webkit-scrollbar-thumb:hover {
           background: rgba(255, 255, 255, 0.2);
         }
-      `}} />
+      ` }} />
     </div>
   );
 }
