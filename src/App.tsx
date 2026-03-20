@@ -5,15 +5,16 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SatelliteScene } from './components/SatelliteScene';
-import { generateMockNodes, generateMockTopology } from './utils/mockData';
+import { generateMockNodes, generateMockTopology, generateNodesFromMeta } from './utils/mockData';
 import { parseTopologyJson } from './utils/topologyParser';
-import { NodeData, LinkData, Transmission } from './types';
+import { NodeData, LinkData, TopologyMeta, Transmission } from './types';
 import { Play, Pause, RotateCcw, LocateFixed, Activity, Database, Radio, Info, Upload } from 'lucide-react';
 import { motion } from 'motion/react';
 
 const TOTAL_SHARDS = 10;
-const SATELLITE_COUNT = 12;
+const SATELLITE_COUNT = 32;
 const TRANSMISSION_DURATION = 2000; // ms
+const DEFAULT_BACKEND_TOPOLOGY_FILE = 'intervals32.json';
 
 export default function App() {
   const [nodes, setNodes] = useState<NodeData[]>([]);
@@ -23,14 +24,38 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(1000); // simulation time units per real second
   const [cameraResetSignal, setCameraResetSignal] = useState(0);
+  const [topologyMeta, setTopologyMeta] = useState<TopologyMeta>({
+    num_nodes: SATELLITE_COUNT + 1,
+    base_node: 0,
+    time_unit: 's',
+  });
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastUpdateRef = useRef<number>(0);
 
   // Initialize
   useEffect(() => {
-    setNodes(generateMockNodes(SATELLITE_COUNT));
-    setLinks(generateMockTopology(SATELLITE_COUNT));
+    const initializeTopology = async () => {
+      try {
+        const query = new URLSearchParams({ file: DEFAULT_BACKEND_TOPOLOGY_FILE });
+        const response = await fetch(`/api/topology?${query.toString()}`);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch backend topology: ${response.status}`);
+        }
+
+        const backendTopology = await response.json() as { meta: TopologyMeta; links: LinkData[] };
+        setTopologyMeta(backendTopology.meta);
+        setNodes(generateNodesFromMeta(backendTopology.meta.num_nodes, backendTopology.meta.base_node, TOTAL_SHARDS));
+        setLinks(backendTopology.links);
+      } catch (error) {
+        console.error('Failed to load backend topology intervals32.json, fallback to frontend mock topology.', error);
+        setTopologyMeta({ num_nodes: SATELLITE_COUNT + 1, base_node: 0, time_unit: 's' });
+        setNodes(generateMockNodes(SATELLITE_COUNT));
+        setLinks(generateMockTopology(SATELLITE_COUNT));
+      }
+    };
+
+    initializeTopology();
   }, []);
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -41,16 +66,13 @@ export default function App() {
     reader.onload = (e) => {
       try {
         const json = JSON.parse(e.target?.result as string);
-        const parsedLinks = parseTopologyJson(json);
-        setLinks(parsedLinks);
-        
-        // Update nodes if topology has more nodes than current
-        const maxNodeId = Math.max(...parsedLinks.flatMap(l => [l.from, l.to]), SATELLITE_COUNT);
-        if (maxNodeId >= nodes.length) {
-          setNodes(generateMockNodes(maxNodeId));
-        }
-        
-        handleReset();
+        const parsedTopology = parseTopologyJson(json);
+        setLinks(parsedTopology.links);
+        setTopologyMeta(parsedTopology.meta);
+        setNodes(generateNodesFromMeta(parsedTopology.meta.num_nodes, parsedTopology.meta.base_node, TOTAL_SHARDS));
+        setCurrentTime(0);
+        setTransmissions([]);
+        setIsPlaying(false);
       } catch (err) {
         console.error("Failed to parse topology JSON", err);
         alert("Invalid topology JSON format");
@@ -144,7 +166,7 @@ export default function App() {
 
   const handleReset = () => {
     setCurrentTime(0);
-    setNodes(generateMockNodes(SATELLITE_COUNT));
+    setNodes(generateNodesFromMeta(topologyMeta.num_nodes, topologyMeta.base_node, TOTAL_SHARDS));
     setTransmissions([]);
     setIsPlaying(false);
   };
@@ -152,6 +174,12 @@ export default function App() {
   const totalProgress = nodes.length > 1 
     ? nodes.filter(n => n.type === 'satellite').reduce((acc, n) => acc + n.shards.size, 0) / ((nodes.length - 1) * TOTAL_SHARDS)
     : 0;
+
+  useEffect(() => {
+    if (isPlaying && totalProgress >= 1) {
+      setIsPlaying(false);
+    }
+  }, [isPlaying, totalProgress]);
 
   return (
     <div className="flex flex-col h-screen bg-[#020617] text-slate-200 overflow-hidden font-sans">
@@ -215,7 +243,7 @@ export default function App() {
 
       <main className="flex-1 relative flex">
         {/* Sidebar */}
-        <aside className="w-80 border-r border-white/10 bg-black/40 backdrop-blur-xl p-6 flex flex-col gap-8 z-10">
+        <aside className="w-80 border-r border-white/10 bg-black/40 backdrop-blur-xl p-6 flex flex-col gap-8 z-10 min-h-0">
           <section>
             <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
               <Activity className="w-3 h-3" /> Network Status
@@ -248,11 +276,11 @@ export default function App() {
             </div>
           </section>
 
-          <section className="flex-1 overflow-hidden flex flex-col">
+          <section className="flex-1 min-h-0 overflow-hidden flex flex-col">
             <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
               <Database className="w-3 h-3" /> Node Registry
             </h3>
-            <div className="flex-1 overflow-y-auto pr-2 space-y-2 custom-scrollbar">
+            <div className="flex-1 min-h-0 overflow-y-auto pr-2 space-y-2 custom-scrollbar">
               {nodes.map(node => (
                 <div key={node.id} className="group p-3 bg-white/5 rounded-lg border border-white/5 hover:border-indigo-500/30 transition-colors">
                   <div className="flex justify-between items-center mb-1">
