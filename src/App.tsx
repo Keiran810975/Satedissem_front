@@ -8,7 +8,7 @@ import { SatelliteScene } from './components/SatelliteScene';
 import { generateMockNodes, generateMockTopology } from './utils/mockData';
 import { parseTopologyJson } from './utils/topologyParser';
 import { NodeData, LinkData, Transmission } from './types';
-import { Play, Pause, RotateCcw, Activity, Database, Radio, Info, Upload } from 'lucide-react';
+import { Play, Pause, RotateCcw, LocateFixed, Activity, Database, Radio, Info, Upload } from 'lucide-react';
 import { motion } from 'motion/react';
 
 const TOTAL_SHARDS = 10;
@@ -22,6 +22,7 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(1000); // simulation time units per real second
+  const [cameraResetSignal, setCameraResetSignal] = useState(0);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastUpdateRef = useRef<number>(0);
@@ -185,6 +186,14 @@ export default function App() {
             >
               <RotateCcw className="w-5 h-5" />
             </button>
+            <button
+              onClick={() => setCameraResetSignal((prev) => prev + 1)}
+              className="p-3 bg-white/5 border border-white/10 rounded-full hover:bg-white/10 transition-all active:scale-95"
+              title="恢复初始视角"
+              aria-label="恢复初始视角"
+            >
+              <LocateFixed className="w-5 h-5" />
+            </button>
             <div className="h-8 w-px bg-white/10 mx-2" />
             <input 
               type="file" 
@@ -286,6 +295,7 @@ export default function App() {
             transmissions={transmissions} 
             currentTime={currentTime}
             totalShards={TOTAL_SHARDS}
+            cameraResetSignal={cameraResetSignal}
           />
           
           {/* Legend */}

@@ -1,24 +1,45 @@
 import { NodeData, LinkData } from '../types';
 
 export const generateMockNodes = (count: number): NodeData[] => {
+  return generateNodesFromMeta(count + 1, 0, 10);
+};
+
+export const generateNodesFromMeta = (
+  numNodes: number,
+  baseNodeId: number,
+  totalShards: number,
+): NodeData[] => {
+  const nodeIds = Array.from({ length: numNodes }, (_, i) => i);
+  return generateSceneNodes(nodeIds, baseNodeId, totalShards);
+};
+
+export const generateSceneNodes = (
+  nodeIds: number[],
+  baseNodeId: number,
+  totalShards: number,
+): NodeData[] => {
   const nodes: NodeData[] = [];
-  
-  // Base Station at origin (or slightly offset)
+
+  const sortedNodeIds = [...nodeIds].sort((a, b) => a - b);
+  const satelliteIds = sortedNodeIds.filter((id) => id !== baseNodeId);
+
   nodes.push({
-    id: 0,
+    id: baseNodeId,
     type: 'station',
     position: [0, -5, 0],
-    shards: new Set(Array.from({ length: 10 }, (_, i) => i)), // Station has all 10 shards
+    shards: new Set(Array.from({ length: totalShards }, (_, i) => i)),
   });
 
-  // Satellites in a sphere/orbit
-  for (let i = 1; i <= count; i++) {
-    const phi = Math.acos(-1 + (2 * i) / count);
-    const theta = Math.sqrt(count * Math.PI) * phi;
+  const count = satelliteIds.length;
+  for (let idx = 0; idx < satelliteIds.length; idx++) {
+    const satId = satelliteIds[idx];
+    const i = idx + 1;
+    const phi = Math.acos(-1 + (2 * i) / Math.max(count, 1));
+    const theta = Math.sqrt(Math.max(count, 1) * Math.PI) * phi;
     const radius = 10;
-    
+
     nodes.push({
-      id: i,
+      id: satId,
       type: 'satellite',
       position: [
         radius * Math.cos(theta) * Math.sin(phi),
@@ -29,7 +50,7 @@ export const generateMockNodes = (count: number): NodeData[] => {
     });
   }
 
-  return nodes;
+  return nodes.sort((a, b) => a.id - b.id);
 };
 
 export const generateMockTopology = (nodeCount: number): LinkData[] => {

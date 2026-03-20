@@ -1,8 +1,38 @@
-import React, { useRef, useMemo } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import React, { useEffect, useRef, useMemo } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Stars, Text, Float, Line } from '@react-three/drei';
 import * as THREE from 'three';
 import { NodeData, LinkData, Transmission } from '../types';
+
+const INITIAL_CAMERA_POSITION: [number, number, number] = [0, 6, 55];
+const INITIAL_CAMERA_TARGET: [number, number, number] = [0, -12, 0];
+
+interface CameraResetControllerProps {
+  resetSignal: number;
+  controlsRef: React.RefObject<any>;
+}
+
+const CameraResetController: React.FC<CameraResetControllerProps> = ({ resetSignal, controlsRef }) => {
+  const { camera, invalidate } = useThree();
+
+  useEffect(() => {
+    if (resetSignal === 0) return;
+
+    const perspectiveCamera = camera as THREE.PerspectiveCamera;
+    perspectiveCamera.position.set(...INITIAL_CAMERA_POSITION);
+    perspectiveCamera.lookAt(...INITIAL_CAMERA_TARGET);
+    perspectiveCamera.updateProjectionMatrix();
+
+    if (controlsRef.current) {
+      controlsRef.current.target.set(...INITIAL_CAMERA_TARGET);
+      controlsRef.current.update();
+    }
+
+    invalidate();
+  }, [camera, controlsRef, invalidate, resetSignal]);
+
+  return null;
+};
 
 interface NodeProps {
   data: NodeData;
@@ -114,6 +144,7 @@ interface SceneProps {
   transmissions: Transmission[];
   currentTime: number;
   totalShards: number;
+  cameraResetSignal?: number;
 }
 
 export const SatelliteScene: React.FC<SceneProps> = ({ 
@@ -121,11 +152,15 @@ export const SatelliteScene: React.FC<SceneProps> = ({
   links, 
   transmissions, 
   currentTime,
-  totalShards
+  totalShards,
+  cameraResetSignal = 0,
 }) => {
+  const controlsRef = useRef<any>(null);
+
   return (
     <div className="w-full h-full bg-[#020617]">
-      <Canvas camera={{ position: [20, 20, 20], fov: 45 }}>
+      <Canvas camera={{ position: INITIAL_CAMERA_POSITION, fov: 52 }}>
+        <CameraResetController resetSignal={cameraResetSignal} controlsRef={controlsRef} />
         <ambientLight intensity={0.5} />
         <pointLight position={[10, 10, 10]} intensity={1} />
         <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
@@ -162,7 +197,7 @@ export const SatelliteScene: React.FC<SceneProps> = ({
           ))}
         </group>
 
-        <OrbitControls makeDefault />
+        <OrbitControls ref={controlsRef} target={INITIAL_CAMERA_TARGET} makeDefault />
       </Canvas>
     </div>
   );

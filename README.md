@@ -1,20 +1,29 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Satedissem Frontend
 
-# Run and deploy your AI Studio app
+前端可视化已对接后端 API：
+- 读取后端可用拓扑文件列表
+- 读取后端默认配置和算法选项
+- 调用后端真实仿真并回放传输事件
 
-This contains everything you need to run your app locally.
+## 本地运行
 
-View your app in AI Studio: https://ai.studio/apps/281aef47-d053-4d67-aa37-fec11b55b5c8
+### 1) 启动后端 API
+在 `Satedissem_back` 目录执行：
 
-## Run Locally
+```bash
+go run . -serve -addr :8080
+```
 
-**Prerequisites:**  Node.js
+### 2) 启动前端
+在 `Satedissem_front` 目录执行：
 
+```bash
+npm install
+npm run dev
+```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+默认通过 Vite 代理把 `/api` 转发到 `http://localhost:8080`。
+
+## 可选环境变量
+
+- `VITE_BACKEND_URL`：覆盖后端地址（默认 `http://localhost:8080`）
