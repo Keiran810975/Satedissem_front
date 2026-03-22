@@ -16,16 +16,17 @@ import {
   TopologyMeta,
   Transmission,
 } from './types';
-import { Play, Pause, RotateCcw, LocateFixed, Activity, Database, Radio, Info, Loader2 } from 'lucide-react';
+import { Play, Pause, RotateCcw, LocateFixed, Activity, Database, Radio, Info, Loader2, ChevronDown } from 'lucide-react';
 import { motion } from 'motion/react';
 
 const FALLBACK_TOTAL_SHARDS = 10;
 const TRANSMISSION_DURATION_SEC = 0.25;
 const SPEED_OPTIONS = [0.2, 1, 5];
 const DEFAULT_TOPOLOGY_FILE = 'intervals32.json';
-const PLAYBACK_SLOWDOWN = 0.2;
-const MAX_DELIVERIES_PER_TICK = 2;
+const PLAYBACK_SLOWDOWN = 0.12;
+const MAX_DELIVERIES_PER_TICK = 1;
 const PACKET_VISUAL_DURATION_SEC = TRANSMISSION_DURATION_SEC * PLAYBACK_SLOWDOWN;
+const MAX_VISIBLE_LOG_ITEMS = 300;
 
 function maxTimelineFromLinks(links: LinkData[]): number {
   let maxEnd = 0;
@@ -61,6 +62,7 @@ export default function App() {
   const [playbackEndTime, setPlaybackEndTime] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [isLogCollapsed, setIsLogCollapsed] = useState(true);
 
   const lastUpdateRef = useRef<number>(0);
   const deliveryCursorRef = useRef<number>(0);
@@ -263,6 +265,18 @@ export default function App() {
     }
     return `Incomplete (${summary.total_deliveries} deliveries)`;
   }, [errorMessage, isLoading, summary]);
+
+  const visibleLogs = useMemo(() => {
+    if (deliveries.length === 0) return [];
+
+    const reachedEvents = deliveries.filter((event) => event.time_sec <= currentTime);
+    const startIndex = Math.max(0, reachedEvents.length - MAX_VISIBLE_LOG_ITEMS);
+    return reachedEvents.slice(startIndex).reverse();
+  }, [deliveries, currentTime]);
+
+  const formatNodeLabel = useCallback((nodeId: number) => {
+    return nodeId === topologyMeta.base_node ? `Base Station(${nodeId})` : `Sat ${nodeId}`;
+  }, [topologyMeta.base_node]);
 
   return (
     <div className="flex flex-col h-screen bg-[#020617] text-slate-200 overflow-hidden font-sans">
@@ -471,6 +485,42 @@ export default function App() {
                 {multiplier}x
               </button>
             ))}
+          </div>
+
+          <div className="absolute top-24 right-8 z-20 flex flex-col items-end gap-3 pointer-events-auto">
+            {!isLogCollapsed && (
+              <div className="w-[420px] max-w-[42vw] bg-black/65 backdrop-blur-md rounded-2xl border border-white/10 overflow-hidden">
+                <div className="px-4 py-3 border-b border-white/10">
+                  <p className="text-xs uppercase tracking-widest text-slate-500">Transmission Log</p>
+                  <p className="text-sm text-slate-300">{visibleLogs.length} / {deliveries.length} events shown</p>
+                </div>
+
+                <div className="max-h-72 overflow-y-auto custom-scrollbar px-4 py-3 space-y-2">
+                  {visibleLogs.length === 0 ? (
+                    <p className="text-xs text-slate-500">No delivery events reached current timeline yet.</p>
+                  ) : (
+                    visibleLogs.map((event, index) => (
+                      <div key={`${event.time_sec}-${event.src_id}-${event.dst_id}-${event.fragment_id}-${index}`} className="text-xs text-slate-300 leading-relaxed">
+                        <span className="text-indigo-300 font-mono">[{event.time_sec.toFixed(2)}s]</span>{' '}
+                        <span>{formatNodeLabel(event.src_id)}</span>{' '}
+                        <span className="text-slate-500">→</span>{' '}
+                        <span>{formatNodeLabel(event.dst_id)}</span>{' '}
+                        <span className="text-slate-500">fragment</span>{' '}
+                        <span className="text-amber-300">#{event.fragment_id}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={() => setIsLogCollapsed((prev) => !prev)}
+              className="px-4 py-2 bg-indigo-600/90 hover:bg-indigo-500 text-white rounded-full border border-indigo-300/30 shadow-lg shadow-indigo-900/40 text-xs font-semibold tracking-wide transition-colors flex items-center gap-2"
+            >
+              <span>Log</span>
+              <ChevronDown className={`w-4 h-4 transition-transform ${isLogCollapsed ? '' : 'rotate-180'}`} />
+            </button>
           </div>
         </div>
       </main>

@@ -110,13 +110,13 @@ const LinkLine: React.FC<LinkProps> = ({ from, to, active }) => {
   );
 };
 
-const Packet: React.FC<{ transmission: Transmission; nodes: NodeData[]; currentTime: number }> = ({ 
+const Packet: React.FC<{ transmission: Transmission; nodeById: Map<number, NodeData>; currentTime: number }> = ({ 
   transmission, 
-  nodes, 
+  nodeById,
   currentTime 
 }) => {
-  const fromNode = nodes.find(n => n.id === transmission.fromId);
-  const toNode = nodes.find(n => n.id === transmission.toId);
+  const fromNode = nodeById.get(transmission.fromId);
+  const toNode = nodeById.get(transmission.toId);
   
   if (!fromNode || !toNode) return null;
 
@@ -156,6 +156,13 @@ export const SatelliteScene: React.FC<SceneProps> = ({
   cameraResetSignal = 0,
 }) => {
   const controlsRef = useRef<any>(null);
+  const nodeById = useMemo(() => {
+    const map = new Map<number, NodeData>();
+    for (const node of nodes) {
+      map.set(node.id, node);
+    }
+    return map;
+  }, [nodes]);
 
   return (
     <div className="w-full h-full bg-[#020617]">
@@ -167,8 +174,8 @@ export const SatelliteScene: React.FC<SceneProps> = ({
         
         <group>
           {links.map((link, idx) => {
-            const fromNode = nodes.find(n => n.id === link.from);
-            const toNode = nodes.find(n => n.id === link.to);
+            const fromNode = nodeById.get(link.from);
+            const toNode = nodeById.get(link.to);
             const isActive = link.intervals.some(([start, end]) => currentTime >= start && currentTime <= end);
             
             if (!fromNode || !toNode) return null;
@@ -191,7 +198,7 @@ export const SatelliteScene: React.FC<SceneProps> = ({
             <Packet 
               key={tx.id} 
               transmission={tx} 
-              nodes={nodes} 
+              nodeById={nodeById}
               currentTime={currentTime} 
             />
           ))}
