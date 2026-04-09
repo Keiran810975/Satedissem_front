@@ -5,6 +5,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SatelliteScene } from './components/SatelliteScene';
+import logoImage from './assets/satedissem-logo.png';
 import { generateNodesFromMeta } from './utils/mockData';
 import { fetchBackendOptions, fetchTopology, runBackendSimulation } from './utils/api';
 import {
@@ -282,11 +283,11 @@ export default function App() {
     <div className="flex flex-col h-screen bg-[#020617] text-slate-200 overflow-hidden font-sans">
       <header className="flex items-center justify-between px-8 py-4 border-b border-white/10 bg-black/20 backdrop-blur-md z-10">
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-indigo-500/20 rounded-lg">
-            <Radio className="w-6 h-6 text-indigo-400" />
+          <div className="h-10 w-10 overflow-hidden rounded-lg border border-white/15 bg-white/90 shadow-sm">
+            <img src={logoImage} alt="SATEDISSEM logo" className="h-full w-full object-cover" />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-white">SatSim <span className="text-indigo-400 font-normal italic text-sm ml-2">v1.0</span></h1>
+            <h1 className="text-xl font-bold tracking-tight text-white">SATEDISSEM <span className="text-indigo-400 font-normal italic text-sm ml-2">v2.1</span></h1>
             <p className="text-xs text-slate-400 uppercase tracking-widest">Orbital Data Transmission</p>
           </div>
         </div>
@@ -329,7 +330,7 @@ export default function App() {
             <button
               onClick={handleRunSimulation}
               disabled={!config || isLoading}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-all text-sm font-medium disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2 bg-white hover:bg-slate-100 text-black rounded-lg transition-all text-sm font-medium disabled:opacity-50"
             >
               {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
               <span>Run Backend</span>
@@ -516,7 +517,7 @@ export default function App() {
 
             <button
               onClick={() => setIsLogCollapsed((prev) => !prev)}
-              className="px-4 py-2 bg-indigo-600/90 hover:bg-indigo-500 text-white rounded-full border border-indigo-300/30 shadow-lg shadow-indigo-900/40 text-xs font-semibold tracking-wide transition-colors flex items-center gap-2"
+              className="px-4 py-2 bg-white hover:bg-slate-100 text-black rounded-full border border-white/40 shadow-lg shadow-black/30 text-xs font-semibold tracking-wide transition-colors flex items-center gap-2"
             >
               <span>Log</span>
               <ChevronDown className={`w-4 h-4 transition-transform ${isLogCollapsed ? '' : 'rotate-180'}`} />
